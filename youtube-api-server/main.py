@@ -1,11 +1,14 @@
 import json
 import os
+import sys
+import traceback
 from urllib.parse import urlparse, parse_qs, urlencode
 from urllib.request import urlopen
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
 
@@ -27,24 +30,41 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 全局异常处理
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    error_detail = {
+        "error": str(exc),
+        "traceback": traceback.format_exc()
+    }
+    print(f"Global exception: {error_detail}", file=sys.stderr)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Internal Server Error: {str(exc)}"}
+    )
+
 class YouTubeTools:
     @staticmethod
     def get_youtube_video_id(url: str) -> Optional[str]:
         """Function to get the video ID from a YouTube URL."""
-        parsed_url = urlparse(url)
-        hostname = parsed_url.hostname
+        try:
+            parsed_url = urlparse(url)
+            hostname = parsed_url.hostname
 
-        if hostname == "youtu.be":
-            return parsed_url.path[1:]
-        if hostname in ("www.youtube.com", "youtube.com"):
-            if parsed_url.path == "/watch":
-                query_params = parse_qs(parsed_url.query)
-                return query_params.get("v", [None])[0]
-            if parsed_url.path.startswith("/embed/"):
-                return parsed_url.path.split("/")[2]
-            if parsed_url.path.startswith("/v/"):
-                return parsed_url.path.split("/")[2]
-        return None
+            if hostname == "youtu.be":
+                return parsed_url.path[1:]
+            if hostname in ("www.youtube.com", "youtube.com"):
+                if parsed_url.path == "/watch":
+                    query_params = parse_qs(parsed_url.query)
+                    return query_params.get("v", [None])[0]
+                if parsed_url.path.startswith("/embed/"):
+                    return parsed_url.path.split("/")[2]
+                if parsed_url.path.startswith("/v/"):
+                    return parsed_url.path.split("/")[2]
+            return None
+        except Exception as e:
+            print(f"Error parsing YouTube URL: {url}, Error: {str(e)}", file=sys.stderr)
+            return None
 
     @staticmethod
     def get_video_data(url: str) -> dict:
@@ -56,8 +76,9 @@ class YouTubeTools:
             video_id = YouTubeTools.get_youtube_video_id(url)
             if not video_id:
                 raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-        except Exception:
-            raise HTTPException(status_code=400, detail="Error getting video ID from URL")
+        except Exception as e:
+            print(f"Error getting video ID: {str(e)}", file=sys.stderr)
+            raise HTTPException(status_code=400, detail=f"Error getting video ID from URL: {str(e)}")
 
         try:
             params = {"format": "json", "url": f"https://www.youtube.com/watch?v={video_id}"}
@@ -82,6 +103,7 @@ class YouTubeTools:
                 }
                 return clean_data
         except Exception as e:
+            print(f"Error getting video data: {str(e)}", file=sys.stderr)
             raise HTTPException(status_code=500, detail=f"Error getting video data: {str(e)}")
 
     @staticmethod
@@ -94,19 +116,24 @@ class YouTubeTools:
             video_id = YouTubeTools.get_youtube_video_id(url)
             if not video_id:
                 raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-        except Exception:
-            raise HTTPException(status_code=400, detail="Error getting video ID from URL")
+        except Exception as e:
+            print(f"Error getting video ID: {str(e)}", file=sys.stderr)
+            raise HTTPException(status_code=400, detail=f"Error getting video ID from URL: {str(e)}")
 
         try:
             # 获取视频标题
+            print(f"Getting video data for ID: {video_id}", file=sys.stderr)
             video_data = YouTubeTools.get_video_data(url)
             title = video_data.get("title", "")
 
             # 获取字幕
+            print(f"Getting captions for video ID: {video_id}", file=sys.stderr)
             captions = None
             if languages:
+                print(f"Using languages: {languages}", file=sys.stderr)
                 captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
             else:
+                print("No language specified, using default", file=sys.stderr)
                 captions = YouTubeTranscriptApi.get_transcript(video_id)
             
             if captions:
@@ -131,6 +158,8 @@ class YouTubeTools:
                 "subtitles": []
             }
         except Exception as e:
+            print(f"Error getting captions: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             raise HTTPException(status_code=500, detail=f"Error getting captions for video: {str(e)}")
 
     @staticmethod
@@ -155,6 +184,7 @@ class YouTubeTools:
                 timestamps.append(f"{minutes}:{seconds:02d} - {line['text']}")
             return timestamps
         except Exception as e:
+            print(f"Error generating timestamps: {str(e)}", file=sys.stderr)
             raise HTTPException(status_code=500, detail=f"Error generating timestamps: {str(e)}")
 
 class YouTubeRequest(BaseModel):
