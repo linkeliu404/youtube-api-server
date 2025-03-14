@@ -15,20 +15,13 @@ import {
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
-  const [useBackupApi, setUseBackupApi] = useState(false);
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      // 尝试使用主 API
-      let apiEndpoint = "/api/subtitle";
-
-      // 如果上次失败或用户选择了备用 API，则使用备用 API
-      if (useBackupApi) {
-        apiEndpoint = "/api/direct-subtitle";
-      }
+      const apiEndpoint = "/api/subtitle";
 
       const response = await fetch(apiEndpoint, {
         method: "POST",
@@ -42,15 +35,7 @@ export default function Home() {
       console.log("Received data:", data);
 
       if (!response.ok) {
-        // 如果主 API 失败，尝试使用备用 API
-        if (!useBackupApi && apiEndpoint === "/api/subtitle") {
-          setUseBackupApi(true);
-          throw new Error(
-            `${data.error || "Failed to fetch subtitle"} - Trying backup API...`
-          );
-        } else {
-          throw new Error(data.error || "Failed to fetch subtitle");
-        }
+        throw new Error(data.error || "Failed to fetch subtitle");
       }
 
       if (data.error) {
@@ -74,13 +59,6 @@ export default function Home() {
       const errorMessage =
         error instanceof Error ? error.message : "Failed to generate subtitle";
       toast.error(errorMessage);
-
-      // 如果错误消息包含 "Trying backup API"，则自动重试
-      if (errorMessage.includes("Trying backup API")) {
-        setTimeout(() => {
-          handleSubmit(e);
-        }, 1000);
-      }
     } finally {
       setLoading(false);
     }
@@ -124,11 +102,6 @@ export default function Home() {
                 "Generate Subtitle"
               )}
             </Button>
-            <div className="text-xs text-center text-muted-foreground">
-              {useBackupApi
-                ? "Using direct API (client-side processing)"
-                : "Using backend API"}
-            </div>
           </form>
         </CardContent>
       </Card>
