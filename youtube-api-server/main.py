@@ -5,6 +5,7 @@ from urllib.request import urlopen
 from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
@@ -16,6 +17,15 @@ except ImportError:
     )
 
 app = FastAPI(title="YouTube Tools API")
+
+# 添加 CORS 中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有来源，生产环境中应该限制为前端域名
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class YouTubeTools:
     @staticmethod
@@ -75,7 +85,7 @@ class YouTubeTools:
             raise HTTPException(status_code=500, detail=f"Error getting video data: {str(e)}")
 
     @staticmethod
-    def get_video_captions(url: str, languages: Optional[List[str]] = None) -> str:
+    def get_video_captions(url: str, languages: Optional[List[str]] = None) -> dict:
         """Get captions from a YouTube video."""
         if not url:
             raise HTTPException(status_code=400, detail="No URL provided")
@@ -88,6 +98,11 @@ class YouTubeTools:
             raise HTTPException(status_code=400, detail="Error getting video ID from URL")
 
         try:
+            # 获取视频标题
+            video_data = YouTubeTools.get_video_data(url)
+            title = video_data.get("title", "")
+
+            # 获取字幕
             captions = None
             if languages:
                 captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
@@ -95,8 +110,26 @@ class YouTubeTools:
                 captions = YouTubeTranscriptApi.get_transcript(video_id)
             
             if captions:
-                return " ".join(line["text"] for line in captions)
-            return "No captions found for video"
+                # 格式化时间戳
+                formatted_captions = []
+                for caption in captions:
+                    start = int(caption["start"])
+                    minutes, seconds = divmod(start, 60)
+                    formatted_caption = {
+                        "text": caption["text"],
+                        "timestamp": f"{minutes}:{seconds:02d}",
+                        "start": start,
+                        "duration": caption["duration"]
+                    }
+                    formatted_captions.append(formatted_caption)
+                return {
+                    "title": title,
+                    "subtitles": formatted_captions
+                }
+            return {
+                "title": title,
+                "subtitles": []
+            }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error getting captions for video: {str(e)}")
 
@@ -143,8 +176,13 @@ async def get_video_timestamps(request: YouTubeRequest):
     """Endpoint to get video timestamps"""
     return YouTubeTools.get_video_timestamps(request.url, request.languages)
 
+# 添加健康检查端点
+@app.get("/")
+async def root():
+    return {"status": "ok", "message": "YouTube Subtitle API is running"}
+
 if __name__ == "__main__":
     # Use environment variable for port, default to 8000 if not set
     port = int(os.getenv("PORT", 8000))
-    host = os.getenv("HOST", "0.0.0.0")
+    host = os.getenv("HOST", "127.0.0.1")
     uvicorn.run(app, host=host, port=port)
