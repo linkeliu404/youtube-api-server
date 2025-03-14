@@ -1,1 +1,0 @@
-import { YoutubeTranscript } from 'youtube-transcript'; const transcript = new YoutubeTranscript(); console.log(transcript.getSubtitles); transcript.getSubtitles('dQw4w9WgXcQ').then(data => console.log('Got data:', data.length)).catch(err => console.error('Error:', err));
