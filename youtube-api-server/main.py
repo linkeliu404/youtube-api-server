@@ -3,9 +3,10 @@ import os
 import sys
 import traceback
 from urllib.parse import urlparse, parse_qs, urlencode
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 from typing import Optional, List
 import time
+import re
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,6 +54,8 @@ class YouTubeTools:
     def get_youtube_video_id(url: str) -> Optional[str]:
         """Function to get the video ID from a YouTube URL."""
         try:
+            # 尝试多种方法提取视频ID
+            # 方法1: 使用 urlparse
             parsed_url = urlparse(url)
             hostname = parsed_url.hostname
 
@@ -66,6 +69,17 @@ class YouTubeTools:
                     return parsed_url.path.split("/")[2]
                 if parsed_url.path.startswith("/v/"):
                     return parsed_url.path.split("/")[2]
+            
+            # 方法2: 使用正则表达式
+            youtube_regex = (
+                r'(https?://)?(www\.)?'
+                '(youtube|youtu|youtube-nocookie)\.(com|be)/'
+                '(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
+            )
+            youtube_regex_match = re.match(youtube_regex, url)
+            if youtube_regex_match:
+                return youtube_regex_match.group(6)
+            
             return None
         except Exception as e:
             print(f"Error parsing YouTube URL: {url}, Error: {str(e)}", file=sys.stderr)
@@ -81,42 +95,65 @@ class YouTubeTools:
             video_id = YouTubeTools.get_youtube_video_id(url)
             if not video_id:
                 raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+            
+            print(f"Extracted video ID for data: {video_id}", file=sys.stderr)
         except Exception as e:
             print(f"Error getting video ID: {str(e)}", file=sys.stderr)
             raise HTTPException(status_code=400, detail=f"Error getting video ID from URL: {str(e)}")
 
         try:
-            params = {"format": "json", "url": f"https://www.youtube.com/watch?v={video_id}"}
-            oembed_url = "https://www.youtube.com/oembed"
-            query_string = urlencode(params)
-            full_url = oembed_url + "?" + query_string
+            # 方法1: 使用 YouTube oembed API
+            try:
+                params = {"format": "json", "url": f"https://www.youtube.com/watch?v={video_id}"}
+                oembed_url = "https://www.youtube.com/oembed"
+                query_string = urlencode(params)
+                full_url = oembed_url + "?" + query_string
 
-            print(f"Fetching video data from: {full_url}", file=sys.stderr)
-            start_time = time.time()
-            
-            with urlopen(full_url) as response:
-                response_text = response.read()
-                video_data = json.loads(response_text.decode())
+                print(f"Fetching video data from: {full_url}", file=sys.stderr)
+                start_time = time.time()
                 
-                end_time = time.time()
-                print(f"Video data fetched in {end_time - start_time:.2f} seconds", file=sys.stderr)
-                
-                clean_data = {
-                    "title": video_data.get("title"),
-                    "author_name": video_data.get("author_name"),
-                    "author_url": video_data.get("author_url"),
-                    "type": video_data.get("type"),
-                    "height": video_data.get("height"),
-                    "width": video_data.get("width"),
-                    "version": video_data.get("version"),
-                    "provider_name": video_data.get("provider_name"),
-                    "provider_url": video_data.get("provider_url"),
-                    "thumbnail_url": video_data.get("thumbnail_url"),
+                # 添加 User-Agent 头，避免被阻止
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                 }
-                return clean_data
+                req = Request(full_url, headers=headers)
+                
+                with urlopen(req) as response:
+                    response_text = response.read()
+                    video_data = json.loads(response_text.decode())
+                    
+                    end_time = time.time()
+                    print(f"Video data fetched in {end_time - start_time:.2f} seconds", file=sys.stderr)
+                    
+                    clean_data = {
+                        "title": video_data.get("title"),
+                        "author_name": video_data.get("author_name"),
+                        "author_url": video_data.get("author_url"),
+                        "type": video_data.get("type"),
+                        "height": video_data.get("height"),
+                        "width": video_data.get("width"),
+                        "version": video_data.get("version"),
+                        "provider_name": video_data.get("provider_name"),
+                        "provider_url": video_data.get("provider_url"),
+                        "thumbnail_url": video_data.get("thumbnail_url"),
+                    }
+                    return clean_data
+            except Exception as e:
+                print(f"Error getting video data from oembed API: {str(e)}", file=sys.stderr)
+                # 如果 oembed API 失败，返回简单的数据
+                return {
+                    "title": f"YouTube Video ({video_id})",
+                    "author_name": "Unknown",
+                    "thumbnail_url": f"https://img.youtube.com/vi/{video_id}/0.jpg",
+                }
         except Exception as e:
             print(f"Error getting video data: {str(e)}", file=sys.stderr)
-            raise HTTPException(status_code=500, detail=f"Error getting video data: {str(e)}")
+            # 返回最基本的数据，避免整个请求失败
+            return {
+                "title": f"YouTube Video ({video_id})",
+                "author_name": "Unknown",
+                "thumbnail_url": f"https://img.youtube.com/vi/{video_id}/0.jpg",
+            }
 
     @staticmethod
     def get_video_captions(url: str, languages: Optional[List[str]] = None) -> dict:
@@ -138,80 +175,60 @@ class YouTubeTools:
             # 获取视频标题
             print(f"Getting video data for ID: {video_id}", file=sys.stderr)
             video_data = YouTubeTools.get_video_data(url)
-            title = video_data.get("title", "")
+            title = video_data.get("title", f"YouTube Video ({video_id})")
             print(f"Video title: {title}", file=sys.stderr)
 
             # 获取字幕
             print(f"Getting captions for video ID: {video_id}", file=sys.stderr)
             captions = None
+            error_messages = []
             
+            # 尝试直接获取字幕，不使用复杂的重试逻辑
             try:
-                # 首先尝试使用指定语言获取字幕
-                if languages:
+                start_time = time.time()
+                
+                # 如果指定了语言，使用指定语言
+                if languages and len(languages) > 0:
                     print(f"Using languages: {languages}", file=sys.stderr)
-                    try:
-                        start_time = time.time()
-                        captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
-                        end_time = time.time()
-                        print(f"Successfully retrieved captions with specified languages in {end_time - start_time:.2f} seconds", file=sys.stderr)
-                    except Exception as e:
-                        print(f"Failed to get captions with specified languages: {str(e)}", file=sys.stderr)
-                        # 如果指定语言失败，尝试获取所有可用语言
-                        print("Trying to list available languages...", file=sys.stderr)
-                        try:
-                            start_time = time.time()
-                            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                            available_languages = [t.language_code for t in transcript_list]
-                            end_time = time.time()
-                            print(f"Available languages: {available_languages} (fetched in {end_time - start_time:.2f} seconds)", file=sys.stderr)
-                            
-                            # 尝试使用第一个可用语言
-                            if available_languages:
-                                print(f"Trying with first available language: {available_languages[0]}", file=sys.stderr)
-                                start_time = time.time()
-                                captions = YouTubeTranscriptApi.get_transcript(video_id, languages=[available_languages[0]])
-                                end_time = time.time()
-                                print(f"Successfully retrieved captions with language {available_languages[0]} in {end_time - start_time:.2f} seconds", file=sys.stderr)
-                        except Exception as inner_e:
-                            print(f"Failed to list available languages: {str(inner_e)}", file=sys.stderr)
+                    captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
                 else:
-                    # 尝试使用默认语言（通常是视频的原始语言）
+                    # 否则尝试获取默认语言
                     print("No language specified, using default", file=sys.stderr)
-                    try:
-                        start_time = time.time()
-                        captions = YouTubeTranscriptApi.get_transcript(video_id)
-                        end_time = time.time()
-                        print(f"Successfully retrieved captions with default language in {end_time - start_time:.2f} seconds", file=sys.stderr)
-                    except Exception as e:
-                        print(f"Failed to get captions with default language: {str(e)}", file=sys.stderr)
-                        # 尝试列出所有可用语言并使用第一个
-                        print("Trying to list available languages...", file=sys.stderr)
-                        try:
-                            start_time = time.time()
-                            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                            available_languages = [t.language_code for t in transcript_list]
-                            end_time = time.time()
-                            print(f"Available languages: {available_languages} (fetched in {end_time - start_time:.2f} seconds)", file=sys.stderr)
-                            
-                            # 尝试使用第一个可用语言
-                            if available_languages:
-                                print(f"Trying with first available language: {available_languages[0]}", file=sys.stderr)
-                                start_time = time.time()
-                                captions = YouTubeTranscriptApi.get_transcript(video_id, languages=[available_languages[0]])
-                                end_time = time.time()
-                                print(f"Successfully retrieved captions with language {available_languages[0]} in {end_time - start_time:.2f} seconds", file=sys.stderr)
-                        except Exception as inner_e:
-                            print(f"Failed to list available languages: {str(inner_e)}", file=sys.stderr)
-                            raise HTTPException(
-                                status_code=500, 
-                                detail=f"Could not retrieve subtitles. Error: {str(e)}. Inner error: {str(inner_e)}"
-                            )
+                    captions = YouTubeTranscriptApi.get_transcript(video_id)
+                
+                end_time = time.time()
+                print(f"Successfully retrieved captions in {end_time - start_time:.2f} seconds", file=sys.stderr)
             except Exception as e:
-                print(f"All attempts to get captions failed: {str(e)}", file=sys.stderr)
-                raise HTTPException(
-                    status_code=500, 
-                    detail=f"All attempts to get captions failed: {str(e)}"
-                )
+                error_message = f"Failed to get captions: {str(e)}"
+                print(error_message, file=sys.stderr)
+                error_messages.append(error_message)
+                
+                # 如果失败，尝试列出可用语言并使用第一个
+                try:
+                    print("Trying to list available languages...", file=sys.stderr)
+                    transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                    available_languages = [t.language_code for t in transcript_list]
+                    print(f"Available languages: {available_languages}", file=sys.stderr)
+                    
+                    if available_languages:
+                        first_lang = available_languages[0]
+                        print(f"Trying with first available language: {first_lang}", file=sys.stderr)
+                        captions = YouTubeTranscriptApi.get_transcript(video_id, languages=[first_lang])
+                        print(f"Successfully retrieved captions with language {first_lang}", file=sys.stderr)
+                except Exception as inner_e:
+                    error_message = f"Failed to list available languages: {str(inner_e)}"
+                    print(error_message, file=sys.stderr)
+                    error_messages.append(error_message)
+                    
+                    # 如果仍然失败，尝试使用 en 语言
+                    try:
+                        print("Trying with 'en' language...", file=sys.stderr)
+                        captions = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+                        print("Successfully retrieved captions with 'en' language", file=sys.stderr)
+                    except Exception as en_e:
+                        error_message = f"Failed to get captions with 'en' language: {str(en_e)}"
+                        print(error_message, file=sys.stderr)
+                        error_messages.append(error_message)
             
             if captions:
                 print(f"Successfully retrieved {len(captions)} caption items", file=sys.stderr)
@@ -233,10 +250,15 @@ class YouTubeTools:
                 }
             
             print("No captions found", file=sys.stderr)
-            return {
-                "title": title,
-                "subtitles": []
-            }
+            # 如果没有找到字幕，返回错误信息
+            error_detail = "No captions found for this video"
+            if error_messages:
+                error_detail += f". Errors: {'; '.join(error_messages)}"
+            
+            raise HTTPException(status_code=404, detail=error_detail)
+        except HTTPException:
+            # 重新抛出 HTTPException
+            raise
         except Exception as e:
             print(f"Error getting captions: {str(e)}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
@@ -261,7 +283,18 @@ class YouTubeTools:
         try:
             print(f"Getting timestamps for video ID: {video_id}", file=sys.stderr)
             start_time = time.time()
-            captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages or ["en"])
+            
+            # 尝试使用指定语言或默认语言
+            try:
+                if languages and len(languages) > 0:
+                    captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
+                else:
+                    captions = YouTubeTranscriptApi.get_transcript(video_id)
+            except Exception as e:
+                print(f"Failed to get captions for timestamps: {str(e)}", file=sys.stderr)
+                # 尝试使用 en 语言
+                captions = YouTubeTranscriptApi.get_transcript(video_id, languages=['en'])
+            
             end_time = time.time()
             print(f"Retrieved captions for timestamps in {end_time - start_time:.2f} seconds", file=sys.stderr)
             
