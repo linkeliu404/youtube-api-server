@@ -5,6 +5,7 @@ import traceback
 from urllib.parse import urlparse, parse_qs, urlencode
 from urllib.request import urlopen
 from typing import Optional, List
+import time
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +19,10 @@ except ImportError:
     raise ImportError(
         "`youtube_transcript_api` not installed. Please install using `pip install youtube_transcript_api`"
     )
+
+# 检查是否在 Vercel 环境中运行
+IS_VERCEL = os.environ.get('VERCEL') == '1'
+print(f"Running in Vercel environment: {IS_VERCEL}", file=sys.stderr)
 
 app = FastAPI(title="YouTube Tools API")
 
@@ -86,9 +91,16 @@ class YouTubeTools:
             query_string = urlencode(params)
             full_url = oembed_url + "?" + query_string
 
+            print(f"Fetching video data from: {full_url}", file=sys.stderr)
+            start_time = time.time()
+            
             with urlopen(full_url) as response:
                 response_text = response.read()
                 video_data = json.loads(response_text.decode())
+                
+                end_time = time.time()
+                print(f"Video data fetched in {end_time - start_time:.2f} seconds", file=sys.stderr)
+                
                 clean_data = {
                     "title": video_data.get("title"),
                     "author_name": video_data.get("author_name"),
@@ -138,42 +150,56 @@ class YouTubeTools:
                 if languages:
                     print(f"Using languages: {languages}", file=sys.stderr)
                     try:
+                        start_time = time.time()
                         captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
-                        print(f"Successfully retrieved captions with specified languages", file=sys.stderr)
+                        end_time = time.time()
+                        print(f"Successfully retrieved captions with specified languages in {end_time - start_time:.2f} seconds", file=sys.stderr)
                     except Exception as e:
                         print(f"Failed to get captions with specified languages: {str(e)}", file=sys.stderr)
                         # 如果指定语言失败，尝试获取所有可用语言
                         print("Trying to list available languages...", file=sys.stderr)
                         try:
+                            start_time = time.time()
                             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
                             available_languages = [t.language_code for t in transcript_list]
-                            print(f"Available languages: {available_languages}", file=sys.stderr)
+                            end_time = time.time()
+                            print(f"Available languages: {available_languages} (fetched in {end_time - start_time:.2f} seconds)", file=sys.stderr)
                             
                             # 尝试使用第一个可用语言
                             if available_languages:
                                 print(f"Trying with first available language: {available_languages[0]}", file=sys.stderr)
+                                start_time = time.time()
                                 captions = YouTubeTranscriptApi.get_transcript(video_id, languages=[available_languages[0]])
+                                end_time = time.time()
+                                print(f"Successfully retrieved captions with language {available_languages[0]} in {end_time - start_time:.2f} seconds", file=sys.stderr)
                         except Exception as inner_e:
                             print(f"Failed to list available languages: {str(inner_e)}", file=sys.stderr)
                 else:
                     # 尝试使用默认语言（通常是视频的原始语言）
                     print("No language specified, using default", file=sys.stderr)
                     try:
+                        start_time = time.time()
                         captions = YouTubeTranscriptApi.get_transcript(video_id)
-                        print("Successfully retrieved captions with default language", file=sys.stderr)
+                        end_time = time.time()
+                        print(f"Successfully retrieved captions with default language in {end_time - start_time:.2f} seconds", file=sys.stderr)
                     except Exception as e:
                         print(f"Failed to get captions with default language: {str(e)}", file=sys.stderr)
                         # 尝试列出所有可用语言并使用第一个
                         print("Trying to list available languages...", file=sys.stderr)
                         try:
+                            start_time = time.time()
                             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
                             available_languages = [t.language_code for t in transcript_list]
-                            print(f"Available languages: {available_languages}", file=sys.stderr)
+                            end_time = time.time()
+                            print(f"Available languages: {available_languages} (fetched in {end_time - start_time:.2f} seconds)", file=sys.stderr)
                             
                             # 尝试使用第一个可用语言
                             if available_languages:
                                 print(f"Trying with first available language: {available_languages[0]}", file=sys.stderr)
+                                start_time = time.time()
                                 captions = YouTubeTranscriptApi.get_transcript(video_id, languages=[available_languages[0]])
+                                end_time = time.time()
+                                print(f"Successfully retrieved captions with language {available_languages[0]} in {end_time - start_time:.2f} seconds", file=sys.stderr)
                         except Exception as inner_e:
                             print(f"Failed to list available languages: {str(inner_e)}", file=sys.stderr)
                             raise HTTPException(
@@ -226,11 +252,19 @@ class YouTubeTools:
             video_id = YouTubeTools.get_youtube_video_id(url)
             if not video_id:
                 raise HTTPException(status_code=400, detail="Invalid YouTube URL")
-        except Exception:
-            raise HTTPException(status_code=400, detail="Error getting video ID from URL")
+            
+            print(f"Extracted video ID for timestamps: {video_id}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error getting video ID for timestamps: {str(e)}", file=sys.stderr)
+            raise HTTPException(status_code=400, detail=f"Error getting video ID from URL: {str(e)}")
 
         try:
+            print(f"Getting timestamps for video ID: {video_id}", file=sys.stderr)
+            start_time = time.time()
             captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages or ["en"])
+            end_time = time.time()
+            print(f"Retrieved captions for timestamps in {end_time - start_time:.2f} seconds", file=sys.stderr)
+            
             timestamps = []
             for line in captions:
                 start = int(line["start"])
@@ -239,6 +273,7 @@ class YouTubeTools:
             return timestamps
         except Exception as e:
             print(f"Error generating timestamps: {str(e)}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             raise HTTPException(status_code=500, detail=f"Error generating timestamps: {str(e)}")
 
 class YouTubeRequest(BaseModel):
@@ -248,16 +283,19 @@ class YouTubeRequest(BaseModel):
 @app.post("/video-data")
 async def get_video_data(request: YouTubeRequest):
     """Endpoint to get video metadata"""
+    print(f"Received request for video data: {request.url}", file=sys.stderr)
     return YouTubeTools.get_video_data(request.url)
 
 @app.post("/video-captions")
 async def get_video_captions(request: YouTubeRequest):
     """Endpoint to get video captions"""
+    print(f"Received request for video captions: {request.url}, languages: {request.languages}", file=sys.stderr)
     return YouTubeTools.get_video_captions(request.url, request.languages)
 
 @app.post("/video-timestamps")
 async def get_video_timestamps(request: YouTubeRequest):
     """Endpoint to get video timestamps"""
+    print(f"Received request for video timestamps: {request.url}, languages: {request.languages}", file=sys.stderr)
     return YouTubeTools.get_video_timestamps(request.url, request.languages)
 
 # 添加健康检查端点
