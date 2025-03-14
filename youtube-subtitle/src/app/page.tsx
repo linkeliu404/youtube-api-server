@@ -12,13 +12,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-interface Subtitle {
-  text: string;
-  timestamp: string;
-  start: number;
-  duration: number;
-}
-
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
