@@ -116,6 +116,8 @@ class YouTubeTools:
             video_id = YouTubeTools.get_youtube_video_id(url)
             if not video_id:
                 raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+            
+            print(f"Extracted video ID: {video_id}", file=sys.stderr)
         except Exception as e:
             print(f"Error getting video ID: {str(e)}", file=sys.stderr)
             raise HTTPException(status_code=400, detail=f"Error getting video ID from URL: {str(e)}")
@@ -125,18 +127,68 @@ class YouTubeTools:
             print(f"Getting video data for ID: {video_id}", file=sys.stderr)
             video_data = YouTubeTools.get_video_data(url)
             title = video_data.get("title", "")
+            print(f"Video title: {title}", file=sys.stderr)
 
             # 获取字幕
             print(f"Getting captions for video ID: {video_id}", file=sys.stderr)
             captions = None
-            if languages:
-                print(f"Using languages: {languages}", file=sys.stderr)
-                captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
-            else:
-                print("No language specified, using default", file=sys.stderr)
-                captions = YouTubeTranscriptApi.get_transcript(video_id)
+            
+            try:
+                # 首先尝试使用指定语言获取字幕
+                if languages:
+                    print(f"Using languages: {languages}", file=sys.stderr)
+                    try:
+                        captions = YouTubeTranscriptApi.get_transcript(video_id, languages=languages)
+                        print(f"Successfully retrieved captions with specified languages", file=sys.stderr)
+                    except Exception as e:
+                        print(f"Failed to get captions with specified languages: {str(e)}", file=sys.stderr)
+                        # 如果指定语言失败，尝试获取所有可用语言
+                        print("Trying to list available languages...", file=sys.stderr)
+                        try:
+                            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                            available_languages = [t.language_code for t in transcript_list]
+                            print(f"Available languages: {available_languages}", file=sys.stderr)
+                            
+                            # 尝试使用第一个可用语言
+                            if available_languages:
+                                print(f"Trying with first available language: {available_languages[0]}", file=sys.stderr)
+                                captions = YouTubeTranscriptApi.get_transcript(video_id, languages=[available_languages[0]])
+                        except Exception as inner_e:
+                            print(f"Failed to list available languages: {str(inner_e)}", file=sys.stderr)
+                else:
+                    # 尝试使用默认语言（通常是视频的原始语言）
+                    print("No language specified, using default", file=sys.stderr)
+                    try:
+                        captions = YouTubeTranscriptApi.get_transcript(video_id)
+                        print("Successfully retrieved captions with default language", file=sys.stderr)
+                    except Exception as e:
+                        print(f"Failed to get captions with default language: {str(e)}", file=sys.stderr)
+                        # 尝试列出所有可用语言并使用第一个
+                        print("Trying to list available languages...", file=sys.stderr)
+                        try:
+                            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                            available_languages = [t.language_code for t in transcript_list]
+                            print(f"Available languages: {available_languages}", file=sys.stderr)
+                            
+                            # 尝试使用第一个可用语言
+                            if available_languages:
+                                print(f"Trying with first available language: {available_languages[0]}", file=sys.stderr)
+                                captions = YouTubeTranscriptApi.get_transcript(video_id, languages=[available_languages[0]])
+                        except Exception as inner_e:
+                            print(f"Failed to list available languages: {str(inner_e)}", file=sys.stderr)
+                            raise HTTPException(
+                                status_code=500, 
+                                detail=f"Could not retrieve subtitles. Error: {str(e)}. Inner error: {str(inner_e)}"
+                            )
+            except Exception as e:
+                print(f"All attempts to get captions failed: {str(e)}", file=sys.stderr)
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"All attempts to get captions failed: {str(e)}"
+                )
             
             if captions:
+                print(f"Successfully retrieved {len(captions)} caption items", file=sys.stderr)
                 # 格式化时间戳
                 formatted_captions = []
                 for caption in captions:
@@ -153,6 +205,8 @@ class YouTubeTools:
                     "title": title,
                     "subtitles": formatted_captions
                 }
+            
+            print("No captions found", file=sys.stderr)
             return {
                 "title": title,
                 "subtitles": []
